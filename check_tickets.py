@@ -6,61 +6,76 @@ from bs4 import BeautifulSoup
 
 URL = "https://www.az.nl/wedstrijden/tickets"
 
-# Environment variables retrieved from GitHub Secrets
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
 RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL")
 
 
 def send_email():
-    body = f"Tickets for AZ vs Juventus may be available now!\n\nCheck immediately here:\n{URL}"
-    msg = MIMEText(body)
-    msg["Subject"] = "🚨 TICKET ALERT: AZ vs Juventus Tickets Available!"
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = RECEIVER_EMAIL
+    if not SENDER_EMAIL or not SENDER_PASSWORD or not RECEIVER_EMAIL:
+        print("❌ Error: Missing secrets in GitHub Settings!")
+        return
 
-    # Connecting via Gmail SMTP
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
-    print("Notification email sent successfully!")
+    # Clean spaces from password if present (Google gives app passwords formatted as "abcd efgh ijkl mnop")
+    cleaned_password = SENDER_PASSWORD.replace(" ", "")
+
+    try:
+        body = f"Tickets for AZ vs Juventus may be available now!\n\nCheck immediately here:\n{URL}"
+        msg = MIMEText(body)
+        msg["Subject"] = "🚨 TICKET ALERT: AZ vs Juventus Tickets Available!"
+        msg["From"] = SENDER_EMAIL
+        msg["To"] = RECEIVER_EMAIL
+
+        # Port 587 + STARTTLS works reliably in cloud environments
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(SENDER_EMAIL, cleaned_password)
+            server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
+
+        print("✅ Notification email sent successfully!")
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
 
 
 def check_tickets():
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
         )
     }
-    response = requests.get(URL, headers=headers)
 
-    if response.status_code == 200:
+    try:
+        response = requests.get(URL, headers=headers, timeout=15)
+        print(f"HTTP Status: {response.status_code}")
+
+        if response.status_code != 200:
+            print(f"⚠️ Website status code: {response.status_code}")
+            return
+
         soup = BeautifulSoup(response.text, "html.parser")
         page_text = soup.get_text().lower()
 
-        # Check if 'juventus' is present along with open ticket sale triggers
         if "juventus" in page_text:
-            if any(
-                phrase in page_text
-                for phrase in [
-                    "koop nu",
-                    "vrije verkoop",
-                    "tickets bestellen",
-                    "bestel nu",
-                ]
-            ):
-                print("Tickets detected in general sale!")
+            print("FOUND: Juventus match listed!")
+            keywords = [
+                "koop nu",
+                "vrije verkoop",
+                "tickets bestellen",
+                "bestel nu",
+            ]
+            if any(kw in page_text for kw in keywords):
+                print("🚨 Tickets detected! Attempting to send email...")
                 send_email()
             else:
-                print(
-                    "Juventus match found, but general sale is not active yet."
-                )
+                print("ℹ️ Juventus listed, but sales are not open yet.")
         else:
-            print("Juventus match listing not found on page.")
-    else:
-        print(
-            f"Failed to fetch AZ website. Response status: {response.status_code}"
-        )
+            print("ℹ️ Juventus match not found on page yet.")
+
+    except Exception as e:
+        print(f"❌ Error scraping website: {e}")
 
 
 if __name__ == "__main__":
